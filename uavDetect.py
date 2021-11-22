@@ -215,9 +215,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
 
                 p = Path(p)  # to Path
-                save_path = str(save_dir / p.name)  # img.jpg
-                rename_path = os.path.join(rename_dir, "show_" + p.name)
-                txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
+                img_save_path = str(save_dir / p.name)  # img.jpg
+                img_rename_path = os.path.join(rename_dir, "show_" + p.name)
+                txt_save_path = str(save_dir / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
+                txt_rename_path = os.path.join(rename_dir, "show_" + p.name.split('.')[0] + ".txt")
                 s += '%gx%g ' % img.shape[2:]  # print string
                 gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
                 imc = im0.copy() if save_crop else im0  # for save_crop
@@ -236,8 +237,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         if save_txt:  # Write to file
                             xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                             line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                            with open(txt_path + '.txt', 'a') as f:
-                                f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                            with open(txt_save_path + '.txt', 'a') as f:
+                                # f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                                f.write('%g ' % cls)
 
                         if save_img or save_crop or view_img:  # Add bbox to image
                             c = int(cls)  # integer class
@@ -245,6 +247,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             annotator.box_label(xyxy, label, color=colors(c, True))
                             if save_crop:
                                 save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                    os.rename(txt_save_path + '.txt', txt_rename_path)
 
                 # Print time (inference-only)
                 LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -258,10 +261,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                 # Save results (image with detections)
                 if save_img:
                     if dataset.mode == 'image':
-                        cv2.imwrite(save_path, im0)
+                        cv2.imwrite(img_save_path, im0)
                     else:  # 'video' or 'stream'
-                        if vid_path[i] != save_path:  # new video
-                            vid_path[i] = save_path
+                        if vid_path[i] != img_save_path:  # new video
+                            vid_path[i] = img_save_path
                             if isinstance(vid_writer[i], cv2.VideoWriter):
                                 vid_writer[i].release()  # release previous video writer
                             if vid_cap:  # video
@@ -270,11 +273,11 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                                 h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                             else:  # stream
                                 fps, w, h = 30, im0.shape[1], im0.shape[0]
-                                save_path += '.mp4'
-                            vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                                img_save_path += '.mp4'
+                            vid_writer[i] = cv2.VideoWriter(img_save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                         vid_writer[i].write(im0)
                     # Rename
-                    os.rename(save_path, rename_path)
+                    os.rename(img_save_path, img_rename_path)
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
@@ -289,24 +292,24 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'model/yolov5x6.pt', help='model path(s)')
-    parser.add_argument('--source', type=str, default=ROOT / '../../dataset/realTimeImg.jpg', help='file/dir/URL/glob, 0 for webcam')
-    parser.add_argument('--project', default=ROOT / '../../dataset', help='save results to project/name')
+    parser.add_argument('--source', type=str, default=ROOT / '../../dataset/hostData/realTimeImg.jpg', help='file/dir/URL/glob, 0 for webcam')
+    parser.add_argument('--project', default=ROOT / '../../dataset/hostData', help='save results to project/name')
     parser.add_argument('--name', default='detece result', help='save results to project/name')
+    parser.add_argument('--save-txt', default=True, action='store_true', help='save results to *.txt')
+    parser.add_argument('--classes', default=[0, 2, 3, 5, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
 
     parser.add_argument('--exist-ok', default=True, action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
 
-    parser.add_argument('--conf-thres', type=float, default=0.80, help='confidence threshold')
+    parser.add_argument('--conf-thres', type=float, default=0.75, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
 
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--view-img', action='store_true', help='show results')
-    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
     parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--visualize', action='store_true', help='visualize features')
