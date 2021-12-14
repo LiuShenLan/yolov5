@@ -291,7 +291,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'model/yolov5x6.pt', help='model path(s)')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'model/yolov5m6.pt', help='model path(s)')
     parser.add_argument('--source', type=str, default=ROOT / '../../dataset/hostData/realTimeImg.jpg', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--project', default=ROOT / '../../dataset/hostData', help='save results to project/name')
     parser.add_argument('--name', default='detece result', help='save results to project/name')
