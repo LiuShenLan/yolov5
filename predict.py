@@ -16,6 +16,7 @@ import argparse
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -64,6 +65,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         hide_conf=False,  # hide confidences
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
+        saveDetect=False,   # 检测到入侵后保存图片
         ):
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
@@ -77,6 +79,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
     rename_dir = os.path.join(project, name)
+    detectObjectImgFlag = False
+    detectObjectImgTimeNameOld = ""
 
     # Initialize
     device = select_device(device)
@@ -224,6 +228,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                 imc = im0.copy() if save_crop else im0  # for save_crop
                 annotator = Annotator(im0, line_width=line_thickness, example=str(names))
                 if len(det):
+                    detectObjectImgFlag = True
                     # Rescale boxes from img_size to im0 size
                     det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
@@ -248,6 +253,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             if save_crop:
                                 save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
                     os.rename(txt_save_path + '.txt', txt_rename_path)
+                else:
+                    detectObjectImgFlag = False
+
 
                 # Print time (inference-only)
                 LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -277,6 +285,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             vid_writer[i] = cv2.VideoWriter(img_save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                         vid_writer[i].write(im0)
                     # Rename
+                    if saveDetect and detectObjectImgFlag:
+                        detectObjectImgTimeName = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime()) + ".jpg"
+                        if detectObjectImgTimeName != detectObjectImgTimeNameOld:
+                            detectObjectImgTimeNameOld = detectObjectImgTimeName
+                            detectObjectImgName = os.path.join(save_dir, "detectObjectImg", detectObjectImgTimeName)
+                            os.system("cp " + img_save_path + " " + detectObjectImgName)
                     os.rename(img_save_path, img_rename_path)
 
     # Print results
@@ -294,9 +308,9 @@ def parse_opt():
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'model/yolov5m6.pt', help='model path(s)')
     parser.add_argument('--source', type=str, default=ROOT / '../../dataset/hostData/realTimeImg.jpg', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--project', default=ROOT / '../../dataset/hostData', help='save results to project/name')
-    parser.add_argument('--name', default='detece result', help='save results to project/name')
+    parser.add_argument('--name', default='detectResult', help='save results to project/name')
     parser.add_argument('--save-txt', default=True, action='store_true', help='save results to *.txt')
-    parser.add_argument('--classes', default=[0, 2, 3, 5, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
+    parser.add_argument('--classes', default=[0, 2, 3, 5, 7], nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
 
     parser.add_argument('--exist-ok', default=True, action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
@@ -319,6 +333,8 @@ def parse_opt():
     parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+
+    parser.add_argument('--saveDetect', default=False, action='store_true', help='save detect Img')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(FILE.stem, opt)
