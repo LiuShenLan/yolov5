@@ -67,25 +67,19 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         hide_conf=False,  # hide confidences
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
-        save_detect_object_img=False,   # 检测到入侵后保存图片
+        save_det=False,   # 检测到入侵后保存图片
         ):
 
-    root_dir = '../../dataset/hostData/realTimeImg/'
-    source_img_path = '../../dataset/hostData/realTimeImg/realTimeImg.jpg'
-    save_img_path = '../../dataset/hostData/realTimeImg/show_realTimeImg.jpg'
+    root_dir = str(Path('../../dataset/hostData/realTimeImg/').resolve())
+    source_img_path = os.path.join(root_dir, 'realTimeImg.jpg')
+    save_img_path = os.path.join(root_dir, 'showRealTimeImg.jpg')
     detect_object_img_flag = False
     detect_object_img_time_name_pre = ""
-    img_save_path = '../../dataset/hostData/detectResult/realTimeImg.jpg'
-    img_rename_path = '../../dataset/hostData/detectResult/show_realTimeImg.jpg'
-    txt_save_path = '../../dataset/hostData/detectResult/realTimeImg'
-    txt_rename_path = '../../dataset/hostData/detectResult/show_realTimeImg.txt'
 
-    # str(Path(source_img_path).resolve())
-
+    # 打开相关文件
+    source_img = open(source_img_path, 'r')
+    save_img = open(save_img_path, 'r')
     # Directories
-    save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
-    (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
-    rename_dir = os.path.join(project, name)
 
     # 初始化
     device = select_device(device)
@@ -108,46 +102,38 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     if device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
 
-    path = str(Path(source_img_path).resolve())
     while True:
-        dt, seen = [0.0, 0.0, 0.0], 0
-
+        t1 = time_sync()
         # 加载图像
-        im0s = cv2.imread(path)  # BGR
-        assert im0s is not None, f'Image Not Found {path}'
+        fcntl.flock(source_img, fcntl.LOCK_EX)
+        im0s = cv2.imread(source_img_path)  # BGR
+        fcntl.flock(source_img, fcntl.LOCK_UN)
+
+        assert im0s is not None, f'Image Not Found {source_img_path}'
         s = 'image: '
         # Padded resize
-        img = letterbox(im0s, [512, 640], stride=64, auto=True)[0]
+        img = letterbox(im0s, imgsz, stride=64, auto=True)[0]
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
         img = np.ascontiguousarray(img)
 
-        t1 = time_sync()
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255  # 0 - 255 to 0.0 - 1.0
         if len(img.shape) == 3:
             img = img[None]  # expand for batch dim
-        t2 = time_sync()
-        dt[0] += t2 - t1
 
         pred = model(img, augment=augment, visualize=False)[0]
 
-        t3 = time_sync()
-        dt[1] += t3 - t2
-
         # NMS
         pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-        dt[2] += time_sync() - t3
 
         # Process predictions
         for i, det in enumerate(pred):  # per image
-            seen += 1
             im0, frame = im0s.copy(), 0
 
             s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
                 detect_object_img_flag = True
@@ -164,34 +150,36 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                        with open(txt_save_path + '.txt', 'a') as f:
-                            # f.write(('%g ' * len(line)).rstrip() % line + '\n')
-                            f.write('%g ' % cls)
 
                     c = int(cls)  # integer class
                     label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
                     annotator.box_label(xyxy, label, color=colors(c, True))
-                os.rename(txt_save_path + '.txt', txt_rename_path)
             else:
                 detect_object_img_flag = False
 
 
-            # Print time (inference-only)
-            LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
+
 
             # Stream results
             im0 = annotator.result()
 
             # Save results (image with detections)
-            cv2.imwrite(img_save_path, im0)
+
+            fcntl.flock(save_img, fcntl.LOCK_EX)
+            cv2.imwrite(save_img_path, im0)
+            fcntl.flock(save_img, fcntl.LOCK_UN)
+
             # Rename
-            if save_detect_object_img and detect_object_img_flag:
+            if save_det and detect_object_img_flag:
                 detect_object_img_time_name = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime()) + ".jpg"
                 if detect_object_img_time_name != detect_object_img_time_name_pre:
                     detect_object_img_time_name_pre = detect_object_img_time_name
-                    detect_object_img_name = os.path.join(save_dir, "detectObjectImg", detect_object_img_time_name)
-                    os.system("cp " + img_save_path + " " + detect_object_img_name)
-            os.rename(img_save_path, img_rename_path)
+                    detect_object_img_name = os.path.join(root_dir, "detectObjectImg", detect_object_img_time_name)
+                    os.system("cp " + save_img_path + " " + detect_object_img_name)
+        t2 = time_sync()
+        t3 = int((t2 - t1) * 1000)
+        # Print time (inference-only)
+        LOGGER.info(f'{s}Done. ({t3}ms)')
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -224,7 +212,7 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
 
-    parser.add_argument('--save_detect_object_img', default=False, action='store_true', help='save detect Img')
+    parser.add_argument('--save_det', default=False, action='store_true', help='save detect Img')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(FILE.stem, opt)
