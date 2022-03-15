@@ -17,12 +17,14 @@ import os
 import platform
 import sys
 import time
+import fcntl
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
+from utils.augmentations import letterbox
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -65,243 +67,131 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         hide_conf=False,  # hide confidences
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
-        saveDetect=False,   # 检测到入侵后保存图片
+        save_detect_object_img=False,   # 检测到入侵后保存图片
         ):
-    source = str(source)
-    save_img = not nosave and not source.endswith('.txt')  # save inference images
-    is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
-    is_url = source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
-    webcam = source.isnumeric() or source.endswith('.txt') or (is_url and not is_file)
-    if is_url and is_file:
-        source = check_file(source)  # download
+
+    root_dir = '../../dataset/hostData/realTimeImg/'
+    source_img_path = '../../dataset/hostData/realTimeImg/realTimeImg.jpg'
+    save_img_path = '../../dataset/hostData/realTimeImg/show_realTimeImg.jpg'
+    detect_object_img_flag = False
+    detect_object_img_time_name_pre = ""
+    img_save_path = '../../dataset/hostData/detectResult/realTimeImg.jpg'
+    img_rename_path = '../../dataset/hostData/detectResult/show_realTimeImg.jpg'
+    txt_save_path = '../../dataset/hostData/detectResult/realTimeImg'
+    txt_rename_path = '../../dataset/hostData/detectResult/show_realTimeImg.txt'
+
+    # str(Path(source_img_path).resolve())
 
     # Directories
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
     rename_dir = os.path.join(project, name)
-    detectObjectImgFlag = False
-    detectObjectImgTimeNameOld = ""
 
-    # Initialize
+    # 初始化
     device = select_device(device)
     half &= device.type != 'cpu'  # half precision only supported on CUDA
 
-    # Load model
+    # 加载模型
     w = str(weights[0] if isinstance(weights, list) else weights)
-    classify, suffix, suffixes = False, Path(w).suffix.lower(), ['.pt', '.onnx', '.tflite', '.pb', '']
+    suffix, suffixes = Path(w).suffix.lower(), ['.pt', '.onnx', '.tflite', '.pb', '']
     check_suffix(w, suffixes)  # check weights have acceptable suffix
-    pt, onnx, tflite, pb, saved_model = (suffix == x for x in suffixes)  # backend booleans
-    stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
-    if pt:
-        model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device)
-        stride = int(model.stride.max())  # model stride
-        names = model.module.names if hasattr(model, 'module') else model.names  # get class names
-        if half:
-            model.half()  # to FP16
-        if classify:  # second-stage classifier
-            modelc = load_classifier(name='resnet50', n=2)  # initialize
-            modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
-    elif onnx:
-        if dnn:
-            check_requirements(('opencv-python>=4.5.4',))
-            net = cv2.dnn.readNetFromONNX(w)
-        else:
-            check_requirements(('onnx', 'onnxruntime-gpu' if torch.has_cuda else 'onnxruntime'))
-            import onnxruntime
-            session = onnxruntime.InferenceSession(w, None)
-    else:  # TensorFlow models
-        import tensorflow as tf
-        if pb:  # https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
-            def wrap_frozen_graph(gd, inputs, outputs):
-                x = tf.compat.v1.wrap_function(lambda: tf.compat.v1.import_graph_def(gd, name=""), [])  # wrapped import
-                return x.prune(tf.nest.map_structure(x.graph.as_graph_element, inputs),
-                               tf.nest.map_structure(x.graph.as_graph_element, outputs))
 
-            graph_def = tf.Graph().as_graph_def()
-            graph_def.ParseFromString(open(w, 'rb').read())
-            frozen_func = wrap_frozen_graph(gd=graph_def, inputs="x:0", outputs="Identity:0")
-        elif saved_model:
-            model = tf.keras.models.load_model(w)
-        elif tflite:
-            if "edgetpu" in w:  # https://www.tensorflow.org/lite/guide/python#install_tensorflow_lite_for_python
-                import tflite_runtime.interpreter as tflri
-                delegate = {'Linux': 'libedgetpu.so.1',  # install libedgetpu https://coral.ai/software/#edgetpu-runtime
-                            'Darwin': 'libedgetpu.1.dylib',
-                            'Windows': 'edgetpu.dll'}[platform.system()]
-                interpreter = tflri.Interpreter(model_path=w, experimental_delegates=[tflri.load_delegate(delegate)])
-            else:
-                interpreter = tf.lite.Interpreter(model_path=w)  # load TFLite model
-            interpreter.allocate_tensors()  # allocate
-            input_details = interpreter.get_input_details()  # inputs
-            output_details = interpreter.get_output_details()  # outputs
-            int8 = input_details[0]['dtype'] == np.uint8  # is TFLite quantized uint8 model
+    model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device)
+    stride = int(model.stride.max())  # model stride
+    names = model.module.names if hasattr(model, 'module') else model.names  # get class names
+    if half:
+        model.half()  # to FP16
+
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # Run inference
-    if pt and device.type != 'cpu':
+    if device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
 
+    path = str(Path(source_img_path).resolve())
     while True:
-        # Dataloader
-        if webcam:
-            view_img = check_imshow()
-            cudnn.benchmark = True  # set True to speed up constant image size inference
-            dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt)
-            bs = len(dataset)  # batch_size
-        else:
-            dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
-            bs = 1  # batch_size
-        vid_path, vid_writer = [None] * bs, [None] * bs
-
         dt, seen = [0.0, 0.0, 0.0], 0
-        for path, img, im0s, vid_cap, s in dataset:
-            t1 = time_sync()
-            if onnx:
-                img = img.astype('float32')
+
+        # 加载图像
+        im0s = cv2.imread(path)  # BGR
+        assert im0s is not None, f'Image Not Found {path}'
+        s = 'image: '
+        # Padded resize
+        img = letterbox(im0s, [512, 640], stride=64, auto=True)[0]
+        # Convert
+        img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+        img = np.ascontiguousarray(img)
+
+        t1 = time_sync()
+        img = torch.from_numpy(img).to(device)
+        img = img.half() if half else img.float()  # uint8 to fp16/32
+        img /= 255  # 0 - 255 to 0.0 - 1.0
+        if len(img.shape) == 3:
+            img = img[None]  # expand for batch dim
+        t2 = time_sync()
+        dt[0] += t2 - t1
+
+        pred = model(img, augment=augment, visualize=False)[0]
+
+        t3 = time_sync()
+        dt[1] += t3 - t2
+
+        # NMS
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        dt[2] += time_sync() - t3
+
+        # Process predictions
+        for i, det in enumerate(pred):  # per image
+            seen += 1
+            im0, frame = im0s.copy(), 0
+
+            s += '%gx%g ' % img.shape[2:]  # print string
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            imc = im0.copy() if save_crop else im0  # for save_crop
+            annotator = Annotator(im0, line_width=line_thickness, example=str(names))
+            if len(det):
+                detect_object_img_flag = True
+                # Rescale boxes from img_size to im0 size
+                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+
+                # Print results
+                for c in det[:, -1].unique():
+                    n = (det[:, -1] == c).sum()  # detections per class
+                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+                # Write results
+                for *xyxy, conf, cls in reversed(det):
+                    if save_txt:  # Write to file
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                        with open(txt_save_path + '.txt', 'a') as f:
+                            # f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                            f.write('%g ' % cls)
+
+                    c = int(cls)  # integer class
+                    label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                    annotator.box_label(xyxy, label, color=colors(c, True))
+                os.rename(txt_save_path + '.txt', txt_rename_path)
             else:
-                img = torch.from_numpy(img).to(device)
-                img = img.half() if half else img.float()  # uint8 to fp16/32
-            img /= 255  # 0 - 255 to 0.0 - 1.0
-            if len(img.shape) == 3:
-                img = img[None]  # expand for batch dim
-            t2 = time_sync()
-            dt[0] += t2 - t1
-
-            # Inference
-            if pt:
-                visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-                pred = model(img, augment=augment, visualize=visualize)[0]
-            elif onnx:
-                if dnn:
-                    net.setInput(img)
-                    pred = torch.tensor(net.forward())
-                else:
-                    pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
-            else:  # tensorflow model (tflite, pb, saved_model)
-                imn = img.permute(0, 2, 3, 1).cpu().numpy()  # image in numpy
-                if pb:
-                    pred = frozen_func(x=tf.constant(imn)).numpy()
-                elif saved_model:
-                    pred = model(imn, training=False).numpy()
-                elif tflite:
-                    if int8:
-                        scale, zero_point = input_details[0]['quantization']
-                        imn = (imn / scale + zero_point).astype(np.uint8)  # de-scale
-                    interpreter.set_tensor(input_details[0]['index'], imn)
-                    interpreter.invoke()
-                    pred = interpreter.get_tensor(output_details[0]['index'])
-                    if int8:
-                        scale, zero_point = output_details[0]['quantization']
-                        pred = (pred.astype(np.float32) - zero_point) * scale  # re-scale
-                pred[..., 0] *= imgsz[1]  # x
-                pred[..., 1] *= imgsz[0]  # y
-                pred[..., 2] *= imgsz[1]  # w
-                pred[..., 3] *= imgsz[0]  # h
-                pred = torch.tensor(pred)
-            t3 = time_sync()
-            dt[1] += t3 - t2
-
-            # NMS
-            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-            dt[2] += time_sync() - t3
-
-            # Second-stage classifier (optional)
-            if classify:
-                pred = apply_classifier(pred, modelc, img, im0s)
-
-            # Process predictions
-            for i, det in enumerate(pred):  # per image
-                seen += 1
-                if webcam:  # batch_size >= 1
-                    p, im0, frame = path[i], im0s[i].copy(), dataset.count
-                    s += f'{i}: '
-                else:
-                    p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
-
-                p = Path(p)  # to Path
-                img_save_path = str(save_dir / p.name)  # img.jpg
-                img_rename_path = os.path.join(rename_dir, "show_" + p.name)
-                txt_save_path = str(save_dir / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
-                txt_rename_path = os.path.join(rename_dir, "show_" + p.name.split('.')[0] + ".txt")
-                s += '%gx%g ' % img.shape[2:]  # print string
-                gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-                imc = im0.copy() if save_crop else im0  # for save_crop
-                annotator = Annotator(im0, line_width=line_thickness, example=str(names))
-                if len(det):
-                    detectObjectImgFlag = True
-                    # Rescale boxes from img_size to im0 size
-                    det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
-
-                    # Print results
-                    for c in det[:, -1].unique():
-                        n = (det[:, -1] == c).sum()  # detections per class
-                        s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-
-                    # Write results
-                    for *xyxy, conf, cls in reversed(det):
-                        if save_txt:  # Write to file
-                            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                            line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                            with open(txt_save_path + '.txt', 'a') as f:
-                                # f.write(('%g ' * len(line)).rstrip() % line + '\n')
-                                f.write('%g ' % cls)
-
-                        if save_img or save_crop or view_img:  # Add bbox to image
-                            c = int(cls)  # integer class
-                            label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
-                            annotator.box_label(xyxy, label, color=colors(c, True))
-                            if save_crop:
-                                save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
-                    os.rename(txt_save_path + '.txt', txt_rename_path)
-                else:
-                    detectObjectImgFlag = False
+                detect_object_img_flag = False
 
 
-                # Print time (inference-only)
-                LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
+            # Print time (inference-only)
+            LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
 
-                # Stream results
-                im0 = annotator.result()
-                if view_img:
-                    cv2.imshow(str(p), im0)
-                    cv2.waitKey(1)  # 1 millisecond
+            # Stream results
+            im0 = annotator.result()
 
-                # Save results (image with detections)
-                if save_img:
-                    if dataset.mode == 'image':
-                        cv2.imwrite(img_save_path, im0)
-                    else:  # 'video' or 'stream'
-                        if vid_path[i] != img_save_path:  # new video
-                            vid_path[i] = img_save_path
-                            if isinstance(vid_writer[i], cv2.VideoWriter):
-                                vid_writer[i].release()  # release previous video writer
-                            if vid_cap:  # video
-                                fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                                w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                                h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                            else:  # stream
-                                fps, w, h = 30, im0.shape[1], im0.shape[0]
-                                img_save_path += '.mp4'
-                            vid_writer[i] = cv2.VideoWriter(img_save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                        vid_writer[i].write(im0)
-                    # Rename
-                    if saveDetect and detectObjectImgFlag:
-                        detectObjectImgTimeName = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime()) + ".jpg"
-                        if detectObjectImgTimeName != detectObjectImgTimeNameOld:
-                            detectObjectImgTimeNameOld = detectObjectImgTimeName
-                            detectObjectImgName = os.path.join(save_dir, "detectObjectImg", detectObjectImgTimeName)
-                            os.system("cp " + img_save_path + " " + detectObjectImgName)
-                    os.rename(img_save_path, img_rename_path)
-
-    # Print results
-    t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
-    LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
-    if save_txt or save_img:
-        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
-    if update:
-        strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
-
+            # Save results (image with detections)
+            cv2.imwrite(img_save_path, im0)
+            # Rename
+            if save_detect_object_img and detect_object_img_flag:
+                detect_object_img_time_name = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime()) + ".jpg"
+                if detect_object_img_time_name != detect_object_img_time_name_pre:
+                    detect_object_img_time_name_pre = detect_object_img_time_name
+                    detect_object_img_name = os.path.join(save_dir, "detectObjectImg", detect_object_img_time_name)
+                    os.system("cp " + img_save_path + " " + detect_object_img_name)
+            os.rename(img_save_path, img_rename_path)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -318,7 +208,7 @@ def parse_opt():
     parser.add_argument('--conf-thres', type=float, default=0.75, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
 
-    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
+    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[512, 640], help='inference size h,w')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--view-img', action='store_true', help='show results')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
@@ -334,7 +224,7 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
 
-    parser.add_argument('--saveDetect', default=False, action='store_true', help='save detect Img')
+    parser.add_argument('--save_detect_object_img', default=False, action='store_true', help='save detect Img')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(FILE.stem, opt)
