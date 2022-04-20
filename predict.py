@@ -74,7 +74,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     source_img_path = os.path.join(root_dir, 'realTimeImg.jpg')
     save_img_path = os.path.join(root_dir, 'showRealTimeImg.jpg')
     detect_object_img_flag = False
-    detect_object_img_time_name_pre = ""
+    detect_object_img_time_pre = ""
+    detect_object_img_index = 0
 
     # 打开相关文件
     source_img = open(source_img_path, 'r')
@@ -171,11 +172,14 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
             # Rename
             if save_det and detect_object_img_flag:
-                detect_object_img_time_name = time.strftime("%Y-%m-%d-%H:%M:%S", time.localtime()) + ".jpg"
-                if detect_object_img_time_name != detect_object_img_time_name_pre:
-                    detect_object_img_time_name_pre = detect_object_img_time_name
-                    detect_object_img_name = os.path.join(root_dir, "detectObjectImg", detect_object_img_time_name)
-                    os.system("cp " + save_img_path + " " + detect_object_img_name)
+                detect_object_img_time = time.strftime("%Y-%m-%d-%H：%M：%S：", time.localtime())
+                if detect_object_img_time != detect_object_img_time_pre:
+                    detect_object_img_index = 0
+                    detect_object_img_time_pre = detect_object_img_time
+                detect_object_img_index += 1
+                detect_object_img_time_name = detect_object_img_time + str(detect_object_img_index) + ".jpg"
+                detect_object_img_name = os.path.join(root_dir, "detectObjectImg", detect_object_img_time_name)
+                os.system("cp " + save_img_path + " " + detect_object_img_name)
         t2 = time_sync()
         t3 = int((t2 - t1) * 1000)
         # Print time (inference-only)
